@@ -10,7 +10,7 @@ The first target is Linux + NVIDIA CUDA. vLLM remains the inference engine; `vll
 curl -fsSL https://raw.githubusercontent.com/tpnthr/vllama/main/install.sh | sh
 ```
 
-The installer creates `~/.vllama/.venv`, installs this package from GitHub into it, and symlinks `vllama` into `~/.local/bin`.
+The installer creates `~/.vllama/.venv` with Python 3.12 by default, installs this package from GitHub into it, and symlinks `vllama` into `~/.local/bin`. Override the Python with `VLLAMA_PYTHON=/path/to/python` if needed; vLLM currently requires Python `>=3.10,<3.14`.
 
 For a non-destructive check:
 

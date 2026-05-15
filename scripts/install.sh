@@ -3,6 +3,7 @@ set -eu
 
 VLLAMA_HOME="${VLLAMA_HOME:-$HOME/.vllama}"
 VLLAMA_BIN_DIR="${VLLAMA_BIN_DIR:-$HOME/.local/bin}"
+VLLAMA_PYTHON="${VLLAMA_PYTHON:-3.12}"
 PROJECT_ROOT="${VLLAMA_SOURCE:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 
 printf '%s\n' "vllama installer"
@@ -24,8 +25,28 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-VLLAMA_PYTHON="${VLLAMA_PYTHON:-python3}"
-uv venv "$VLLAMA_HOME/.venv" --python "$VLLAMA_PYTHON" --seed
+venv_python_is_vllm_compatible() {
+  "$1" - <<'PY'
+import sys
+
+raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)
+PY
+}
+
+VENV_PYTHON="$VLLAMA_HOME/.venv/bin/python"
+if [ -x "$VENV_PYTHON" ]; then
+  if venv_python_is_vllm_compatible "$VENV_PYTHON"; then
+    printf '%s\n' "Using existing compatible Python environment: $VENV_PYTHON"
+  else
+    printf '%s\n' "Existing vllama environment uses a Python version vLLM does not support; replacing it."
+    uv venv "$VLLAMA_HOME/.venv" --python "$VLLAMA_PYTHON" --seed --clear
+  fi
+elif [ -e "$VLLAMA_HOME/.venv" ]; then
+  printf '%s\n' "Existing vllama environment is incomplete; replacing it."
+  uv venv "$VLLAMA_HOME/.venv" --python "$VLLAMA_PYTHON" --seed --clear
+else
+  uv venv "$VLLAMA_HOME/.venv" --python "$VLLAMA_PYTHON" --seed
+fi
 uv pip install --python "$VLLAMA_HOME/.venv/bin/python" "$PROJECT_ROOT"
 
 ln -sf "$VLLAMA_HOME/.venv/bin/vllama" "$VLLAMA_BIN_DIR/vllama"

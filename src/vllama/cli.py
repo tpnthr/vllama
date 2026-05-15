@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import shutil
 from datetime import UTC, datetime
+import shutil
+from subprocess import CalledProcessError
 from typing import Annotated
 
 import typer
@@ -10,7 +11,12 @@ from rich.table import Table
 
 from vllama.client import VllmClient
 from vllama.config import AppConfig, AppPaths, load_config, save_config
-from vllama.installer import collect_install_checks, find_vllm_executable, install_vllm_with_uv
+from vllama.installer import (
+    UnsupportedPythonForVllmError,
+    collect_install_checks,
+    find_vllm_executable,
+    install_vllm_with_uv,
+)
 from vllama.models import ModelRecord, ModelStore
 from vllama.server import ServerManager, tail_log
 
@@ -43,7 +49,15 @@ def install(
     if not any(check.name == "uv" and check.ok for check in checks):
         console.print("uv is required before installing vLLM")
         raise typer.Exit(1)
-    install_vllm_with_uv(dry_run=False)
+    try:
+        install_vllm_with_uv(dry_run=False)
+    except UnsupportedPythonForVllmError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    except CalledProcessError as exc:
+        command = " ".join(str(part) for part in exc.cmd)
+        console.print(f"vLLM installation failed with exit code {exc.returncode}: {command}")
+        raise typer.Exit(exc.returncode) from exc
     vllm_path = find_vllm_executable()
     if vllm_path:
         paths = _paths()

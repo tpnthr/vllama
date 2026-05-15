@@ -6,6 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -15,9 +16,18 @@ class CheckResult:
     detail: str
 
 
+class UnsupportedPythonForVllmError(RuntimeError):
+    """Raised when the active Python cannot install or run vLLM."""
+
+
+VLLM_PYTHON_MIN = (3, 10)
+VLLM_PYTHON_MAX_EXCLUSIVE = (3, 14)
+
+
 def collect_install_checks() -> list[CheckResult]:
     return [
         _check_linux(),
+        _check_python(),
         _check_nvidia_smi(),
         _check_uv(),
         _check_vllm(),
@@ -40,6 +50,7 @@ def build_vllm_install_command(
 
 
 def install_vllm_with_uv(dry_run: bool = False) -> list[str]:
+    ensure_vllm_python_supported()
     command = build_vllm_install_command(uv_executable=find_uv_executable() or "uv")
     if dry_run:
         return command
@@ -67,9 +78,38 @@ def find_uv_executable() -> str | None:
     return None
 
 
+def is_vllm_python_supported(version_info: Sequence[int] = sys.version_info) -> bool:
+    major_minor = (int(version_info[0]), int(version_info[1]))
+    return VLLM_PYTHON_MIN <= major_minor < VLLM_PYTHON_MAX_EXCLUSIVE
+
+
+def ensure_vllm_python_supported(version_info: Sequence[int] = sys.version_info) -> None:
+    if is_vllm_python_supported(version_info):
+        return
+    version = _python_version_label(version_info)
+    raise UnsupportedPythonForVllmError(
+        "vLLM cannot be installed into this vllama environment because it uses "
+        f"Python {version}. vLLM currently requires Python >=3.10,<3.14.\n"
+        "Reinstall vllama with a compatible Python:\n"
+        "  rm -rf ~/.vllama/.venv\n"
+        "  VLLAMA_PYTHON=3.12 curl -fsSL https://raw.githubusercontent.com/tpnthr/vllama/main/install.sh | sh"
+    )
+
+
+def _python_version_label(version_info: Sequence[int] = sys.version_info) -> str:
+    return ".".join(str(int(part)) for part in version_info[:3])
+
+
 def _check_linux() -> CheckResult:
     system = platform.system()
     return CheckResult("linux", system == "Linux", f"platform={system}")
+
+
+def _check_python() -> CheckResult:
+    ok = is_vllm_python_supported()
+    version = _python_version_label()
+    detail = f"Python {version}; vLLM requires >=3.10,<3.14"
+    return CheckResult("python", ok, detail)
 
 
 def _check_nvidia_smi() -> CheckResult:
