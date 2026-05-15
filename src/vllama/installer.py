@@ -22,6 +22,13 @@ class UnsupportedPythonForVllmError(RuntimeError):
 
 VLLM_PYTHON_MIN = (3, 10)
 VLLM_PYTHON_MAX_EXCLUSIVE = (3, 14)
+REQUIRED_DEBIAN_CUDA_PACKAGES = (
+    "cuda-nvcc-13-1",
+    "ninja-build",
+    "libcurand-dev-13-1",
+    "libcublas-dev-13-1",
+    "cuda-nvrtc-dev-13-1",
+)
 
 
 def collect_install_checks() -> list[CheckResult]:
@@ -29,6 +36,7 @@ def collect_install_checks() -> list[CheckResult]:
         _check_linux(),
         _check_python(),
         _check_nvidia_smi(),
+        check_debian_cuda_build_packages(),
         _check_uv(),
         _check_vllm(),
     ]
@@ -128,6 +136,45 @@ def _check_nvidia_smi() -> CheckResult:
         return CheckResult("nvidia-smi", False, str(exc))
     first_line = completed.stdout.strip().splitlines()[0] if completed.stdout.strip() else "no GPUs"
     return CheckResult("nvidia-smi", True, first_line)
+
+
+def check_debian_cuda_build_packages(
+    packages: Sequence[str] = REQUIRED_DEBIAN_CUDA_PACKAGES,
+) -> CheckResult:
+    dpkg_query = shutil.which("dpkg-query")
+    if not dpkg_query:
+        return CheckResult(
+            "cuda-build-deps",
+            False,
+            "dpkg-query not found; on Ubuntu install: " + ", ".join(packages),
+        )
+    try:
+        completed = subprocess.run(
+            [dpkg_query, "-W", "-f=${binary:Package}\\t${db:Status-Abbrev}\\n", *packages],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return CheckResult("cuda-build-deps", False, str(exc))
+
+    installed = _parse_installed_dpkg_packages(completed.stdout)
+    missing = [package for package in packages if package not in installed]
+    installed_count = len(packages) - len(missing)
+    prefix = f"{installed_count}/{len(packages)} installed"
+    if missing:
+        return CheckResult("cuda-build-deps", False, f"{prefix}; missing: {', '.join(missing)}")
+    return CheckResult("cuda-build-deps", True, prefix)
+
+
+def _parse_installed_dpkg_packages(output: str) -> set[str]:
+    installed: set[str] = set()
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "ii":
+            installed.add(parts[0])
+    return installed
 
 
 def _check_uv() -> CheckResult:

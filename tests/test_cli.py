@@ -24,6 +24,7 @@ def test_cli_install_dry_run_prints_checks(tmp_path: Path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "vllama install check" in result.output
+    assert "cuda-build-deps" in result.output
     assert "Dry run: no packages were installed" in result.output
 
 
