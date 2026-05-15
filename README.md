@@ -4,19 +4,27 @@
 
 The first target is Linux + NVIDIA CUDA. vLLM remains the inference engine; `vllama` provides the usability layer around installation checks, model metadata, server lifecycle, chat commands, and a simple terminal UI.
 
-## Install From This Checkout
+## Install
 
 ```sh
-sh scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/tpnthr/vllama/main/install.sh | sh
 ```
 
-The installer creates `~/.vllama/.venv`, installs this package into it, and symlinks `vllama` into `~/.local/bin`.
+The installer creates `~/.vllama/.venv`, installs this package from GitHub into it, and symlinks `vllama` into `~/.local/bin`.
 
 For a non-destructive check:
 
 ```sh
 vllama install --dry-run
 ```
+
+## Install From A Checkout
+
+```sh
+sh scripts/install.sh
+```
+
+Use this form when developing from a local clone.
 
 ## Typical Usage
 
