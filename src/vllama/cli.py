@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import shutil
 from subprocess import CalledProcessError
+import time
 from typing import Annotated
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -104,10 +106,22 @@ def serve(
 
 
 @app.command()
-def run(model: str, prompt: str) -> None:
-    """Send a one-shot prompt to the running vLLM server."""
+def run(
+    model: str,
+    prompt: str,
+    extra_arg: Annotated[
+        list[str] | None,
+        typer.Option("--arg", help="Extra argument passed to vllm serve when auto-starting."),
+    ] = None,
+    startup_timeout: Annotated[
+        float,
+        typer.Option("--startup-timeout", help="Seconds to wait for an auto-started vLLM server."),
+    ] = 900.0,
+) -> None:
+    """Send a one-shot prompt, auto-starting vLLM if needed."""
     paths = _paths()
     ModelStore(paths).upsert(_record(model))
+    _ensure_server_for_model(model, startup_timeout=startup_timeout, extra_args=extra_arg or [])
     message = [{"role": "user", "content": prompt}]
     try:
         content = VllmClient(load_config(paths)).chat(model, message, stream=False)
@@ -118,9 +132,20 @@ def run(model: str, prompt: str) -> None:
 
 
 @app.command()
-def chat(model: str) -> None:
-    """Open a simple interactive chat loop."""
+def chat(
+    model: str,
+    extra_arg: Annotated[
+        list[str] | None,
+        typer.Option("--arg", help="Extra argument passed to vllm serve when auto-starting."),
+    ] = None,
+    startup_timeout: Annotated[
+        float,
+        typer.Option("--startup-timeout", help="Seconds to wait for an auto-started vLLM server."),
+    ] = 900.0,
+) -> None:
+    """Open an interactive chat loop, auto-starting vLLM if needed."""
     messages: list[dict[str, str]] = []
+    _ensure_server_for_model(model, startup_timeout=startup_timeout, extra_args=extra_arg or [])
     client = VllmClient(_config())
     console.print(f"Chatting with {model}. Type /bye to exit.")
     while True:
@@ -213,6 +238,73 @@ def tui() -> None:
     from vllama.tui import VllamaTui
 
     VllamaTui().run()
+
+
+def _ensure_server_for_model(
+    model: str,
+    startup_timeout: float,
+    extra_args: list[str] | None = None,
+) -> None:
+    paths = _paths()
+    config = load_config(paths)
+    if _model_available(config, model):
+        return
+
+    manager = ServerManager(paths, config)
+    status = manager.status()
+    if status.running and status.state:
+        state = status.state
+        if state.model != model:
+            console.print(
+                f"Managed vLLM is already running [bold]{state.model}[/bold]. "
+                f"Run [bold]vllama stop[/bold] before chatting with [bold]{model}[/bold]."
+            )
+            raise typer.Exit(1)
+        console.print(f"Waiting for vLLM to finish loading [bold]{model}[/bold]...")
+    else:
+        if not shutil.which(config.vllm_executable):
+            console.print(f"vLLM executable was not found: {config.vllm_executable}")
+            raise typer.Exit(1)
+        console.print(f"Starting vLLM for [bold]{model}[/bold]...")
+        state = manager.start(model, extra_args=extra_args or [])
+        ModelStore(paths).upsert(_record(model))
+        console.print(f"OpenAI-compatible endpoint: http://{state.host}:{state.port}/v1")
+        console.print(f"Logs: {state.log_file}")
+
+    if _wait_for_model_available(config, model, timeout_seconds=startup_timeout):
+        return
+
+    status = manager.status()
+    log_hint = f" Logs: {status.state.log_file}" if status.state else ""
+    console.print(f"Timed out waiting for vLLM to serve {model} after {startup_timeout:g}s.{log_hint}")
+    raise typer.Exit(1)
+
+
+def _wait_for_model_available(
+    config: AppConfig,
+    model: str,
+    timeout_seconds: float,
+    poll_seconds: float = 2.0,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() <= deadline:
+        if _model_available(config, model):
+            return True
+        time.sleep(poll_seconds)
+    return _model_available(config, model)
+
+
+def _model_available(config: AppConfig, model: str) -> bool:
+    try:
+        response = httpx.get(f"http://{config.host}:{config.port}/v1/models", timeout=2.0)
+        response.raise_for_status()
+        data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return False
+    models = data.get("data", [])
+    if not isinstance(models, list):
+        return False
+    return any(isinstance(item, dict) and item.get("id") == model for item in models)
 
 
 def _record(model: str) -> ModelRecord:
